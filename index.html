@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Affichage SIMS</title>
+    <style>
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border: 1px solid black;
+        }
+        .controls {
+            text-align: center;
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Contrôles utilisateur pour réinitialiser la carte ou afficher/masquer les données -->
+    <div class="controls">
+        <button id="reset-btn">Réinitialiser</button>
+        <button id="toggle-data-btn">Afficher/Masquer les données</button>
+    </div>
+
+    <!-- Zone de dessin pour afficher la carte et les données -->
+    <canvas id="map" width="1920" height="1080"></canvas>
+
+    <!-- Inclusion du script JavaScript -->
+    <script src="/static/script.js"></script>
+</body>
+</html>
