@@ -1,0 +1,166 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+HardwareSerial tfSerial(1);
+
+const char* ssid = "CAMPUS_FA";
+const char* password = "IsFeC@23!";
+const char* serverUrl = "http://10.33.14.168:5001/data";
+
+#define IN1 25
+#define IN2 26
+#define ENA 33
+#define IN3 27
+#define IN4 14
+#define ENB 32
+
+#define ENCODER_DROIT_A 39
+#define ENCODER_GAUCHE_A 35
+
+const float diametre_roue_mm = 65.0;
+const float perimetre_roue_mm = PI * diametre_roue_mm;
+const int impulsions_par_tour = 630;
+const float mm_par_impulsion = perimetre_roue_mm / impulsions_par_tour;
+const float entraxe_mm = 120.0;
+
+volatile long impulsionsDroit = 0;
+volatile long impulsionsGauche = 0;
+long prevImpulsionsDroit = 0;
+long prevImpulsionsGauche = 0;
+
+float x = 0.0, y = 0.0, angle = 0.0;
+float vitesse_droit = 0.0, vitesse_gauche = 0.0;
+float distance_obstacle = 0.0;
+
+unsigned long lastUpdate = 0;
+bool enRotation = false;
+float angleCible = 0.0;
+
+void IRAM_ATTR onEncoderDroit() {
+  impulsionsDroit++;
+}
+
+void IRAM_ATTR onEncoderGauche() {
+  impulsionsGauche++;
+}
+
+void avancer(int pwm) {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENA, pwm); analogWrite(ENB, pwm);
+}
+
+void tournerDroite(int pwm) {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
+  analogWrite(ENA, pwm); analogWrite(ENB, pwm);
+}
+
+void stopMoteurs() {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+  analogWrite(ENA, 0); analogWrite(ENB, 0);
+}
+
+float lireDistanceTFMini() {
+  while (tfSerial.available() >= 9) {
+    if (tfSerial.read() == 0x59 && tfSerial.peek() == 0x59) {
+      tfSerial.read();
+      int distL = tfSerial.read();
+      int distH = tfSerial.read();
+      int distance = (distH << 8) + distL;
+
+      tfSerial.read(); tfSerial.read(); tfSerial.read();
+      tfSerial.read(); tfSerial.read();
+
+      while (tfSerial.available()) tfSerial.read();
+
+      if (distance > 0 && distance < 1200) return (float)distance;
+    } else {
+      tfSerial.read();
+    }
+  }
+  return -1;
+}
+
+void setup() {
+  Serial.begin(115200);
+  tfSerial.begin(115200, SERIAL_8N1, 16, 17);
+
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT); pinMode(ENA, OUTPUT);
+  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT); pinMode(ENB, OUTPUT);
+  pinMode(ENCODER_DROIT_A, INPUT);
+  pinMode(ENCODER_GAUCHE_A, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(ENCODER_DROIT_A), onEncoderDroit, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_GAUCHE_A), onEncoderGauche, RISING);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connecté !");
+  Serial.print("IP locale : ");
+  Serial.println(WiFi.localIP());
+
+  avancer(180);
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastUpdate >= 200) {
+    lastUpdate = now;
+
+    distance_obstacle = lireDistanceTFMini();
+
+    long deltaDroit = impulsionsDroit - prevImpulsionsDroit;
+    long deltaGauche = impulsionsGauche - prevImpulsionsGauche;
+    prevImpulsionsDroit = impulsionsDroit;
+    prevImpulsionsGauche = impulsionsGauche;
+
+    float distDroit = deltaDroit * mm_par_impulsion;
+    float distGauche = deltaGauche * mm_par_impulsion;
+
+    vitesse_droit = distDroit / 0.2;
+    vitesse_gauche = distGauche / 0.2;
+
+    float dMoy = (distDroit + distGauche) / 2.0;
+    float dTheta = (distDroit - distGauche) / entraxe_mm;
+    angle += dTheta * 180.0 / PI;
+    angle = fmod(angle + 360.0, 360.0);
+
+    x += dMoy * cos(angle * PI / 180.0);
+    y += dMoy * sin(angle * PI / 180.0);
+
+    if (!enRotation && distance_obstacle <= 200) {
+      angleCible = fmod(angle + 90.0, 360.0);
+      tournerDroite(180);
+      enRotation = true;
+    }
+
+    if (enRotation && abs(angle - angleCible) < 5.0) {
+      enRotation = false;
+      avancer(180);
+    }
+
+    String jsonData = "{\"x\":" + String(x, 2) +
+                      ",\"y\":" + String(y, 2) +
+                      ",\"angle\":" + String(angle, 2) +
+                      ",\"vitesse_moteur_droit\":" + String(vitesse_droit, 2) +
+                      ",\"vitesse_moteur_gauche\":" + String(vitesse_gauche, 2) +
+                      ",\"distance_obstacle\":" + String(distance_obstacle, 2) + "}";
+
+    Serial.println("----- DONNEES ENVOYEES -----");
+    Serial.println(jsonData);
+
+    HTTPClient http;
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+    int httpCode = http.POST(jsonData);
+    Serial.print("Reponse HTTP : ");
+    Serial.println(httpCode);
+    http.end();
+  }
+}
